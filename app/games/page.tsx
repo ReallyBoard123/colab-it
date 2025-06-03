@@ -3,11 +3,11 @@
 import { useState, useCallback, useRef } from 'react';
 import FlappyBirdGame from '@/components/games/flappy-bird';
 
-interface GameEvent {
+type GameEvent = {
   type: string;
-  data: any;
+  data: unknown;
   timestamp: number;
-}
+};
 
 export default function FlappyBirdPage() {
   const [events, setEvents] = useState<GameEvent[]>([]);

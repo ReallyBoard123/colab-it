@@ -15,7 +15,7 @@ const BIRD_WIDTH = 34;
 const BIRD_HEIGHT = 24;
 const BIRD_X_POSITION = 80; // Bird's horizontal position
 const PIPE_WIDTH = 52;
-const PIPE_IMAGE_HEIGHT = 320; // Actual height of the pipe.png image
+// Removed unused constant PIPE_IMAGE_HEIGHT
 const PIPE_GAP = 120; // Gap between top and bottom pipes
 const GRAVITY = 0.5;
 const JUMP_STRENGTH = -8; // How high the bird jumps
@@ -38,7 +38,7 @@ interface PipeStateType {
 }
 
 interface FlappyBirdGameProps {
-  onGameEvent?: (event: { type: string; data: any; timestamp: number }) => void;
+  onGameEvent?: (event: { type: string; data: unknown; timestamp: number }) => void;
   onGameComplete?: (stats: { score: number }) => void; // Added for potential future use
 }
 
@@ -164,13 +164,31 @@ export default function FlappyBirdGame({ onGameEvent, onGameComplete }: FlappyBi
   const gameAreaRef = useRef<HTMLDivElement>(null); // Ref for the game area div
   const gameStartTimeRef = useRef<number | null>(null); // Ref for game start time
 
-  const emitGameEvent = useCallback((type: string, data: any) => {
-    if (onGameEvent && gameStartTimeRef.current) {
-      const timestamp = (Date.now() - gameStartTimeRef.current) / 1000;
-      setTimeout(() => {
-        onGameEvent({ type, data, timestamp });
-      }, 0);
+  // Track the last emitted event to prevent duplicates
+  const lastEventRef = useRef<{type: string; data: unknown; timestamp: number} | null>(null);
+  
+  const emitGameEvent = useCallback((type: string, data: unknown) => {
+    if (!onGameEvent || !gameStartTimeRef.current) return;
+    
+    const timestamp = (Date.now() - gameStartTimeRef.current) / 1000;
+    const event = { type, data, timestamp };
+    
+    // Skip if this is a duplicate of the last event
+    const lastEvent = lastEventRef.current;
+    if (lastEvent && 
+        lastEvent.type === event.type && 
+        JSON.stringify(lastEvent.data) === JSON.stringify(event.data) &&
+        Math.abs(lastEvent.timestamp - event.timestamp) < 0.1) {
+      return;
     }
+    
+    // Update last event and emit
+    lastEventRef.current = event;
+    
+    // Use requestAnimationFrame to ensure we're in the browser context
+    requestAnimationFrame(() => {
+      onGameEvent(event);
+    });
   }, [onGameEvent]);
 
   const resetGame = useCallback((startPlaying = true) => {
@@ -196,51 +214,98 @@ export default function FlappyBirdGame({ onGameEvent, onGameComplete }: FlappyBi
   }, [gameState]);
 
   const handleGameOver = useCallback(() => {
-    setGameState('over');
-    emitGameEvent('flappy_bird_game_over', { finalScore: score });
-    if (onGameComplete) {
-      onGameComplete({ score });
-    }
+    // Only proceed if we're not already in the 'over' state
+    setGameState(prevState => {
+      if (prevState === 'over') return prevState;
+      
+      // Calculate final score from the latest state
+      const finalScore = score;
+      emitGameEvent('flappy_bird_game_over', { finalScore });
+      
+      if (onGameComplete) {
+        onGameComplete({ score: finalScore });
+      }
+      
+      return 'over';
+    });
   }, [score, emitGameEvent, onGameComplete]);
-
-  const handleGameAction = useCallback(() => {
-    if (gameState === 'start') {
-      resetGame(true);
-    } else if (gameState === 'playing') {
-      jump();
-    } else if (gameState === 'over') {
-      resetGame(false); // Go back to start screen
-    }
-  }, [gameState, jump, resetGame]);
 
   // Input Handling (Keyboard and Click/Tap)
   useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.key === ' ') {
-        e.preventDefault(); // Prevent page scroll
-        handleGameAction();
+    let isMounted = true;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isMounted) return;
+      
+      if ((e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') && gameState !== 'over') {
+        e.preventDefault();
+        if (gameState === 'start') {
+          resetGame(true);
+        } else {
+          jump();
+        }
+      } else if (e.code === 'KeyR' && gameState === 'over') {
+        e.preventDefault();
+        resetGame(true);
       }
     };
 
-    window.addEventListener('keydown', handleKeyPress);
+    const handleClick = (e: MouseEvent) => {
+      if (!isMounted) return;
+      e.preventDefault();
+      if (gameState === 'start') {
+        resetGame(true);
+      } else if (gameState === 'playing') {
+        jump();
+      } else if (gameState === 'over') {
+        resetGame(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
     
     const gameAreaElement = gameAreaRef.current;
     if (gameAreaElement) {
-      gameAreaElement.addEventListener('click', handleGameAction);
-      gameAreaElement.addEventListener('touchstart', (e) => {
-        e.preventDefault(); // Prevent double tap zoom or other touch behaviors
-        handleGameAction();
-      }, { passive: false });
+      gameAreaElement.addEventListener('click', handleClick);
     }
-
+    
     return () => {
-      window.removeEventListener('keydown', handleKeyPress);
+      isMounted = false;
+      window.removeEventListener('keydown', handleKeyDown);
       if (gameAreaElement) {
-        gameAreaElement.removeEventListener('click', handleGameAction);
-        gameAreaElement.removeEventListener('touchstart', handleGameAction);
+        gameAreaElement.removeEventListener('click', handleClick);
       }
     };
-  }, [handleGameAction]);
+  }, [gameState, jump, resetGame]);
+
+  // Touch controls for mobile
+  useEffect(() => {
+    let isMounted = true;
+    
+    const handleTouchStart = (e: TouchEvent) => {
+      if (!isMounted) return;
+      e.preventDefault();
+      if (gameState === 'start') {
+        resetGame(true);
+      } else if (gameState === 'playing') {
+        jump();
+      } else if (gameState === 'over') {
+        resetGame(true);
+      }
+    };
+
+    const gameAreaElement = gameAreaRef.current;
+    if (gameAreaElement) {
+      gameAreaElement.addEventListener('touchstart', handleTouchStart, { passive: false });
+    }
+    
+    return () => {
+      isMounted = false;
+      if (gameAreaElement) {
+        gameAreaElement.removeEventListener('touchstart', handleTouchStart);
+      }
+    };
+  }, [gameState, jump, resetGame]);
 
 
   // Game Loop
@@ -280,36 +345,58 @@ export default function FlappyBirdGame({ onGameEvent, onGameComplete }: FlappyBi
         setBirdRotation(r => Math.min(r + BIRD_ROTATION_SPEED, BIRD_ROTATION_DOWN_MAX));
       }
 
-      // Pipe movement, scoring, and collision
+      // Track if we've already scored in this frame to prevent double scoring
+      let hasScoredInThisFrame = false;
+      
+      // Update pipes, check for scoring, and handle collisions in a single pass
       setPipes(prevPipes => {
-        let newPipes = prevPipes.map(pipe => ({ ...pipe, x: pipe.x - PIPE_SPEED }));
-        let scoreChanged = false;
-        let currentScore = score;
+        let shouldEndGame = false;
+        let newScore = score;
 
-        for (const pipe of newPipes) {
-          if (!pipe.scored && pipe.x + PIPE_WIDTH < BIRD_X_POSITION) {
-            pipe.scored = true;
-            currentScore++;
-            scoreChanged = true;
-          }
-
-          const birdRect = { x: BIRD_X_POSITION, y: birdY, width: BIRD_WIDTH, height: BIRD_HEIGHT };
-          const pipeRightEdge = pipe.x + PIPE_WIDTH;
-
-          if (BIRD_X_POSITION + BIRD_WIDTH > pipe.x && BIRD_X_POSITION < pipeRightEdge) {
-            const topPipeBottomEdge = pipe.topPipeHeight;
-            const bottomPipeTopEdge = pipe.topPipeHeight + PIPE_GAP;
-
-            if (birdY < topPipeBottomEdge || birdY + BIRD_HEIGHT > bottomPipeTopEdge) {
-              handleGameOver();
+        const updatedPipes = prevPipes
+          .map(pipe => {
+            // Move pipe to the left
+            const newX = pipe.x - PIPE_SPEED;
+            
+            // Check if bird passed this pipe for scoring
+            let newScored = pipe.scored;
+            if (!newScored && newX < BIRD_X_POSITION - PIPE_WIDTH / 2) {
+              newScored = true;
+              if (!hasScoredInThisFrame) {
+                newScore++;
+                hasScoredInThisFrame = true;
+              }
             }
-          }
+            
+            // Check for collisions
+            if (!shouldEndGame) {
+              const pipeRightEdge = newX + PIPE_WIDTH;
+              if (BIRD_X_POSITION + BIRD_WIDTH > newX && BIRD_X_POSITION < pipeRightEdge) {
+                const topPipeBottomEdge = pipe.topPipeHeight;
+                const bottomPipeTopEdge = pipe.topPipeHeight + PIPE_GAP;
+
+                if (birdY < topPipeBottomEdge || birdY + BIRD_HEIGHT > bottomPipeTopEdge) {
+                  shouldEndGame = true;
+                }
+              }
+            }
+            
+            return { ...pipe, x: newX, scored: newScored };
+          })
+          .filter(pipe => pipe.x > -PIPE_WIDTH); // Remove pipes that are off-screen
+
+        // Update score if needed
+        if (newScore !== score) {
+          setScore(newScore);
+          emitGameEvent('flappy_bird_scored', { score: newScore });
         }
-        if (scoreChanged) {
-          setScore(currentScore);
-          emitGameEvent('flappy_bird_score_update', { score: currentScore });
+
+        // Handle game over if collision detected
+        if (shouldEndGame) {
+          handleGameOver();
         }
-        return newPipes.filter(pipe => pipe.x > -PIPE_WIDTH);
+
+        return updatedPipes;
       });
       
       if (gameState === 'playing') {
@@ -381,7 +468,7 @@ export default function FlappyBirdGame({ onGameEvent, onGameComplete }: FlappyBi
             title="Flappy Bird"
             message="Click or Press Space to Play"
             buttonText="Start Game"
-            onButtonClick={handleGameAction}
+            onButtonClick={() => resetGame(true)}
           />
         )}
         {gameState === 'over' && (
@@ -389,7 +476,7 @@ export default function FlappyBirdGame({ onGameEvent, onGameComplete }: FlappyBi
             title="Game Over!"
             score={score}
             buttonText="Try Again"
-            onButtonClick={handleGameAction}
+            onButtonClick={() => resetGame(true)}
           />
         )}
 
